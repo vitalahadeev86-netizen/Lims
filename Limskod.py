@@ -1,15 +1,15 @@
 import asyncio
+import os
 from datetime import datetime
 import discord
 from discord.ext import commands
 
-# --- НАСТРОЙКИ БОТА ---
-TOKEN = 'YOUR_BOT_TOKEN_HERE'  # Сюда вставь токен твоего бота в кавычках
+# --- НАСТРОЙКИ БОТА (ID ИЗ ТВОЕГО СКРИНШОТА) ---
 YOUR_DISCORD_ID = 813289862580928544
 CATEGORY_TIER_ID = 1564151394242400286
 LOG_CHANNEL_ID = 1564287632735862844
 
-# --- 3 РОЛИ ДОСТУПА ---
+# --- 3 РОЛИ ДОСТУПА ДЛЯ ОТОБРАЖЕНИЯ ТИКЕТА ---
 ACCESS_ROLE_1_ID = 1562179700460363936
 ACCESS_ROLE_2_ID = 1529899557654106232
 ACCESS_ROLE_3_ID = 1564144768588587079
@@ -30,22 +30,12 @@ class TierRejectModal(discord.ui.Modal, title="Отказ в выдаче Tier")
         await inter.response.defer(ephemeral=True)
         guild = inter.guild
 
-        # Защита: если объект игрока потерялся, пробуем найти его по владельцу канала
-        if not self.applicant:
-            async for entry in guild.audit_logs(action=discord.AuditLogAction.channel_create, limit=5):
-                if entry.target and entry.target.id == inter.channel.id:
-                    self.applicant = entry.user
-                    break
-
-        # Если лог пустой, ищем по упоминаниям в первом сообщении канала
         if not self.applicant and inter.channel.topic:
             try:
-                uid = int(inter.channel.topic)
-                self.applicant = guild.get_member(uid)
+                self.applicant = guild.get_member(int(inter.channel.topic))
             except:
                 pass
 
-        # Финальная заглушка на случай, если тип совсем вышел с сервера
         app_mention = self.applicant.mention if self.applicant else "@Участник (покинул сервер)"
         app_name = self.applicant.name if self.applicant else "Неизвестно"
         app_avatar = self.applicant.display_avatar.url if self.applicant else None
@@ -115,7 +105,6 @@ class TierModerationView(discord.ui.View):
                                                                         ephemeral=True)
         guild = inter.guild
 
-        # Если при восстановлении View applicant равен None, пытаемся вытащить его из описания канала
         if not self.applicant and inter.channel.topic:
             try:
                 self.applicant = guild.get_member(int(inter.channel.topic))
@@ -123,8 +112,7 @@ class TierModerationView(discord.ui.View):
                 pass
 
         if not self.applicant:
-            return await inter.response.send_message("❌ Ошибка: Игрок не найден на сервере или покинул его.",
-                                                     ephemeral=True)
+            return await inter.response.send_message("❌ Ошибка: Игрок не найден на сервере.", ephemeral=True)
 
         role = discord.utils.get(guild.roles, name=role_name)
         if not role: return await inter.response.send_message(f"❌ Ошибка: Роль `{role_name}` не найдена!",
@@ -152,8 +140,8 @@ class TierModerationView(discord.ui.View):
             await asyncio.sleep(10)
             await inter.channel.delete()
         except discord.Forbidden:
-            await inter.response.send_message(
-                "❌ У бота нет прав! Поднимите его роль выше остальных ролей в настройках.", ephemeral=True)
+            await inter.response.send_message("❌ У бота нет прав! Поднимите его роль выше остальных в настройках.",
+                                              ephemeral=True)
 
     @discord.ui.button(label="Tier 1", style=discord.ButtonStyle.green, custom_id="t_t1_b_new")
     async def b3(self, inter, b):
@@ -172,8 +160,6 @@ class TierModerationView(discord.ui.View):
         if not await self.chk_and_lock(inter): return
         if not self.moderator: return await inter.response.send_message("❌ Сначала нажмите кнопку «Рассмотрение»!",
                                                                         ephemeral=True)
-
-        # Передаем актуального игрока в модалку отказа
         if not self.applicant and inter.channel.topic:
             try:
                 self.applicant = inter.guild.get_member(int(inter.channel.topic))
@@ -187,8 +173,7 @@ class TierModal(discord.ui.Modal, title="Заявка на Tier"):
                               required=True)
     t2 = discord.ui.TextInput(label="2. Откаты с MCL | ВЗЗ | ВЗМ | КАПТ | и т.д", style=discord.TextStyle.long,
                               required=True)
-    t3 = discord.ui.TextInput (label="3. Сыллка на ЛК", style=discord.TextStyle.long,
-                              required=True)
+    t3 = discord.ui.TextInput(label="3. Ссылка на ЛК", style=discord.TextStyle.long, required=True)
 
     async def on_submit(self, inter):
         await inter.response.defer(ephemeral=True)
@@ -200,8 +185,6 @@ class TierModal(discord.ui.Modal, title="Заявка на Tier"):
             int(ACCESS_ROLE_3_ID))
         try:
             ow = {guild.default_role: discord.PermissionOverwrite(read_messages=False)}
-
-            # Принудительно убираем роли создателя тикета, чтобы они не наследовались
             for member_role in inter.user.roles:
                 if member_role != guild.default_role:
                     ow[member_role] = discord.PermissionOverwrite(read_messages=False, send_messages=False)
@@ -213,7 +196,6 @@ class TierModal(discord.ui.Modal, title="Заявка на Tier"):
             if r2: ow[r2] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
             if r3: ow[r3] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-            # Записываем ID игрока в Описание Канала (topic), чтобы бот никогда его не потерял!
             ch = await guild.create_text_channel(name=f"тир-{inter.user.name}", category=cat, overwrites=ow,
                                                  topic=str(inter.user.id))
         except discord.Forbidden:
@@ -221,7 +203,7 @@ class TierModal(discord.ui.Modal, title="Заявка на Tier"):
                                              ephemeral=True)
 
         emb = discord.Embed(title=f"🥇 Заявка на Tier от {inter.user.display_name}", color=0x111111)
-        emb.add_field(name="1. Арена:", value=self.t1.value, inline=False)
+        emb.add_field(name="1. Арена 10+мин:", value=self.t1.value, inline=False)
         emb.add_field(name="2. Откаты MCL/КАПТ:", value=self.t2.value, inline=False)
         emb.add_field(name="3. Лк", value=self.t3.value, inline=False)
 
@@ -247,7 +229,7 @@ class TierView(discord.ui.View):
 async def on_ready():
     bot.add_view(TierView())
     bot.add_view(TierModerationView(None))
-    print(f'Бот {bot.user.name} успешно запущен!')
+    print(f'Бот {bot.user.name} успешно запущен на хостинге!')
 
 
 @bot.command()
@@ -271,4 +253,7 @@ async def тир(ctx):
         pass
 
 
-        bot.run(os.getenv('DISCORD_TOKEN'))
+if __name__ == "__main__":
+    bot.run('TOKEN')
+
+
