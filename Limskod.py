@@ -1,259 +1,270 @@
+# --- ЧАСТЬ 1.1: МОДАЛКИ И ПРОВЕРКИ ---
 import asyncio
-import os
 from datetime import datetime
 import discord
-from discord.ext import commands
 
-# --- НАСТРОЙКИ БОТА (ID ИЗ ТВОЕГО СКРИНШОТА) ---
 YOUR_DISCORD_ID = 813289862580928544
-CATEGORY_TIER_ID = 1564151394242400286
 LOG_CHANNEL_ID = 1564287632735862844
 
-# --- 3 РОЛИ ДОСТУПА ДЛЯ ОТОБРАЖЕНИЯ ТИКЕТА ---
+CATEGORY_ID = 1564151394242400286
+
 ACCESS_ROLE_1_ID = 1562179700460363936
 ACCESS_ROLE_2_ID = 1529899557654106232
 ACCESS_ROLE_3_ID = 1564144768588587079
+
+
+class DeclineReasonModal(discord.ui.Modal, title="Причина отклонения"):
+    reason = discord.ui.TextInput(
+        label="Укажите причину отказа",
+        style=discord.TextStyle.long,
+        required=True,
+        max_length=400
+    )
+
+    def __init__(self, view, applicant):
+        super().__init__()
+        self.view = view
+        self.applicant = applicant
+
+    async def on_submit(self, inter: discord.Interaction):
+        await inter.response.defer()
+        dec_emb = discord.Embed(
+            title="▫️ ЗАЯВКА ОТКЛОНЕНА",
+            description=f"🤍 Проверка {self.applicant.mention} отклонена модератором {inter.user.mention}.\n🤍 **Причина:** {self.reason.value}",
+            color=0x000000
+        )
+        await inter.followup.send(embed=dec_emb)
+
+        decline_msg = (
+            "### ⠀⠀⠀⠀⠀⠀⠀⠀🤍 **ВЕРИФИКАЦИЯ TIER | HATRED** 🤍\n\n"
+            "🤍 **Ваша заявка на получение статуса Tier была отклонена 🤍**\n\n"
+            f"◽ **Статус:** Отклонено\n"
+            f"◽ **Проверил:** {inter.user.display_name}\n"
+            f"◽ **Причина:** {self.reason.value}\n"
+            f"◽ **Дата:** {datetime.now().strftime('%d.%m.%Y в %H:%M')}\n\n"
+            "▫️ *Вы можете подать заявку заного.*"
+        )
+        await self.view.log_and_dm(inter, self.applicant, "▫️ ЛОГ: ОТКЛОНЕНИЕ ЗАЯВКИ",
+                                   f"▫️ Отклонено (Причина: {self.reason.value})", decline_msg)
+
+
+class TierModal(discord.ui.Modal, title="Заявка на Tier"):
+    # Заголовок (label) сокращен до 38 символов (норма до 45). Полный текст перенесен в placeholder
+    t1 = discord.ui.TextInput(
+        label="1. Откаты с арены Спешик и Сайги",
+        placeholder="Спешик 5+мин | Сайга 5+мин | 6+ типов с начала гг.",
+        style=discord.TextStyle.long,
+        required=True
+    )
+    t2 = discord.ui.TextInput(
+        label="2. Откаты с MCL | ВЗЗ | ВЗМ | КАПТ | и т.д",
+        placeholder="Минимум 3 отката капта.",
+        style=discord.TextStyle.long,
+        required=True
+    )
+    t3 = discord.ui.TextInput(
+        label="3. Ссылка на ЛК",
+        placeholder="Чтоб отправить ссылку на лк, нажмите ПКМ по лк и скопируйте ссылку.",
+        style=discord.TextStyle.long,
+        required=True
+    )
+
+    async def on_submit(self, inter):
+        await inter.response.defer(ephemeral=True)
+        guild = inter.guild
+
+        cat = guild.get_channel(CATEGORY_ID) or inter.channel.category
+
+        if cat:
+            target_name = f"{inter.user.name}".lower()
+            for ch in cat.text_channels:
+                ch_name_lower = ch.name.lower()
+                if ch_name_lower.startswith(f"тир-{target_name}") or ch_name_lower.startswith(
+                        f"рассмотрение-{target_name}"):
+                    return await inter.followup.send(f"▫️ Канал уже открыт: {ch.mention}", ephemeral=True)
+
+        r1, r2, r3 = guild.get_role(ACCESS_ROLE_1_ID), guild.get_role(ACCESS_ROLE_2_ID), guild.get_role(
+            ACCESS_ROLE_3_ID)
+        try:
+            ow = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                inter.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            if r1: ow[r1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            if r2: ow[r2] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            if r3: ow[r3] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+            ch = await guild.create_text_channel(name=f"тир-{inter.user.name}", category=cat, overwrites=ow)
+            emb = discord.Embed(title=f"🤍 Заявка на Tier от {inter.user.display_name}", color=0x000000)
+            emb.add_field(name="▫️ 1. Откаты с арены Спешик 5+мин | Сайга 5+мин | 6+ типов с начала гг:",
+                          value=self.t1.value, inline=False)
+            emb.add_field(name="▫️ 2. Откаты с MCL | ВЗЗ | ВЗМ | КАПТ | и т.д:", value=self.t2.value, inline=False)
+            emb.add_field(name="▫️ 3. Лк:", value=self.t3.value, inline=False)
+            emb.set_footer(text=f"ID: {inter.user.id} • Hatred")
+
+            await ch.send(content=f"{inter.user.mention}", embed=emb)
+            await ch.send(view=TierModerationView())
+            await inter.followup.send(f"▫️ Канал Tier успешно создан: {ch.mention}", ephemeral=True)
+        except Exception as e:
+            await inter.followup.send(f"▫️ Ошибка: {e}", ephemeral=True)
+
+
+# --- ЧАСТЬ 1.2: ПАНЕЛИ КНОПОК (VIEWS) ---
+
+class TierModerationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def get_context(self, inter) -> tuple[discord.Member | None, int | None]:
+        applicant = None
+        async for message in inter.channel.history(limit=5, oldest_first=True):
+            if message.mentions:
+                applicant = message.mentions[0]
+                break
+        handler_id = None
+        ch_name = inter.channel.name
+        if "id-" in ch_name:
+            try:
+                handler_id = int(ch_name.split("id-")[-1])
+            except:
+                pass
+        return applicant, handler_id
+
+    async def chk(self, inter, require_handler=True) -> discord.Member | None:
+        user_role_ids = [role.id for role in inter.user.roles]
+        allowed = [ACCESS_ROLE_1_ID, ACCESS_ROLE_2_ID, ACCESS_ROLE_3_ID]
+        if not any(r_id in allowed for r_id in user_role_ids):
+            await inter.response.send_message("▫️ У вас нет прав для управления панелью Tier.", ephemeral=True)
+            return None
+        applicant, handler_id = await self.get_context(inter)
+        if not applicant:
+            await inter.response.send_message("▫️ Ошибка: Не удалось определить автора заявки.", ephemeral=True)
+            return None
+        if require_handler and not handler_id:
+            await inter.response.send_message("▫️ Сначала нажмите кнопку 'Рассмотрение'!", ephemeral=True)
+            return None
+        if handler_id and handler_id != inter.user.id:
+            await inter.response.send_message(f"▫️ Эту заявку уже проверяет <@{handler_id}>!", ephemeral=True)
+            return None
+        return applicant
+
+    async def log_and_dm(self, inter, applicant, log_title, res_text, pm_msg):
+        log_ch = inter.guild.get_channel(LOG_CHANNEL_ID)
+        if log_ch:
+            log_emb = discord.Embed(title=log_title, color=0x000000)
+            log_emb.add_field(name="🤍 Модератор:", value=inter.user.mention, inline=True)
+            log_emb.add_field(name="🤍 Игрок:", value=applicant.mention, inline=True)
+            log_emb.add_field(name="🤍 Решение:", value=res_text, inline=False)
+            log_emb.set_footer(text=f"Дата: {datetime.now().strftime('%d.%m.%Y в %H:%M')} • Hatred")
+            await log_ch.send(embed=log_emb)
+        try:
+            await applicant.send(content=pm_msg)
+        except:
+            pass
+
+    @discord.ui.button(label="Рассмотрение", style=discord.ButtonStyle.secondary, custom_id="htrd_p:review")
+    async def b_review(self, inter, b):
+        applicant, handler_id = await self.get_context(inter)
+        user_role_ids = [role.id for role in inter.user.roles]
+        if not any(r_id in [ACCESS_ROLE_1_ID, ACCESS_ROLE_2_ID, ACCESS_ROLE_3_ID] for r_id in user_role_ids):
+            return await inter.response.send_message("▫️ У вас нет прав.", ephemeral=True)
+        if handler_id:
+            return await inter.response.send_message("▫️ Заявка уже на рассмотрении!", ephemeral=True)
+        await inter.channel.edit(name=f"рассмотрение-{inter.user.name}-id-{inter.user.id}")
+        review_emb = discord.Embed(title="▫️ ЗАЯВКА НА РАССМОТРЕНИИ",
+                                   description=f"🤍 Модератор {inter.user.mention} принял заявку.\n🤍 Другие модераторы заблокированы.",
+                                   color=0x000000)
+        await inter.response.send_message(embed=review_emb)
+
+    async def give_tier(self, inter, name):
+        applicant = await self.chk(inter)
+        if not applicant: return
+        role = discord.utils.get(inter.guild.roles, name=name)
+        if not role: return await inter.followup.send(f"▫️ Роль `{name}` не найдена!", ephemeral=True)
+        try:
+            for r in ["Tier 1", "Tier 2", "Tier 3"]:
+                old = discord.utils.get(inter.guild.roles, name=r)
+                if old and old in applicant.roles: await applicant.remove_roles(old)
+            await applicant.add_roles(role)
+            ok_emb = discord.Embed(title="▫️ СТАТУС ОБНОВЛЕН",
+                                   description=f"🤍 Игроку {applicant.mention} выдан статус **{name}**!", color=0x000000)
+            await inter.followup.send(embed=ok_emb)
+            success_msg = f"### ⠀⠀⠀⠀⠀⠀⠀⠀▫️ **ВЕРИФИКАЦИЯ TIER | HATRED** ▫️\n\n🤍 **Поздравляем! Ваша заявка успешно одобрена руководством 🤍**\n\n ▫️ **Присвоен статус:** {name}\n▫️ **Проверил:** {inter.user.display_name}\n▫️ **Дата:** {datetime.now().strftime('%d.%m.%Y в %H:%M')}\n\n▫️ *Роль выдана, покажи достойный уровень на каптах!* 🤍"
+            await self.log_and_dm(inter, applicant, "▫️ ЛОГ: ВЫДАЧА TIER", f"▫️ Выдан **{name}**", success_msg)
+        except discord.Forbidden:
+            await inter.followup.send("▫️ Ошибка прав! Поставьте роль бота выше.", ephemeral=True)
+
+    @discord.ui.button(label="Tier 1", style=discord.ButtonStyle.secondary, custom_id="htrd_p:t1")
+    async def b3(self, inter, b):
+        await inter.response.defer(); await self.give_tier(inter, "Tier 1")
+
+    @discord.ui.button(label="Tier 2", style=discord.ButtonStyle.secondary, custom_id="htrd_p:t2")
+    async def b4(self, inter, b):
+        await inter.response.defer(); await self.give_tier(inter, "Tier 2")
+
+    @discord.ui.button(label="Tier 3", style=discord.ButtonStyle.secondary, custom_id="htrd_p:t3")
+    async def b5(self, inter, b):
+        await inter.response.defer(); await self.give_tier(inter, "Tier 3")
+
+    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.secondary, custom_id="htrd_p:dec")
+    async def b_decline(self, inter, b):
+        applicant = await self.chk(inter, require_handler=True)
+        if applicant: await inter.response.send_modal(DeclineReasonModal(self, applicant))
+
+    @discord.ui.button(label="Закрыть тикет", style=discord.ButtonStyle.danger, custom_id="htrd_p:close_ticket")
+    async def b_close_ticket(self, inter, b):
+        applicant, handler_id = await self.get_context(inter)
+        user_role_ids = [role.id for role in inter.user.roles]
+        if not any(r_id in [ACCESS_ROLE_1_ID, ACCESS_ROLE_2_ID, ACCESS_ROLE_3_ID] for r_id in user_role_ids):
+            return await inter.response.send_message("▫️ Нет прав.", ephemeral=True)
+        if not handler_id: return await inter.response.send_message("▫️ Сначала нажмите 'Рассмотрение'!",
+                                                                    ephemeral=True)
+        if handler_id != inter.user.id: return await inter.response.send_message(
+            f"▫️ Закрыть тикет может только: <@{handler_id}>!", ephemeral=True)
+        await inter.response.send_message("▫️ Удаление канала через 5 секунд...")
+        await asyncio.sleep(5)
+        try:
+            await inter.channel.delete()
+        except:
+            pass
+
+
+class TierView(discord.ui.View):
+    def __init__(self): super().__init__(timeout=None)
+
+    @discord.ui.button(label="Подать на Tier", style=discord.ButtonStyle.secondary, custom_id="btn_app_v10")
+    async def b(self, inter, btn):
+        # Весь цикл полностью удален отсюда. Окно теперь открывается мгновенно, таймаута не будет.
+        await inter.response.send_modal(TierModal())
+# --- ЧАСТЬ 2: ЗАПУСК И КОМАНДЫ ---
+import discord
+from discord.ext import commands
+
+YOUR_DISCORD_ID = 813289862580928544
 
 intents = discord.Intents.default()
 intents.message_content = intents.members = intents.presences = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-
-class TierRejectModal(discord.ui.Modal, title="Отказ в выдаче Tier"):
-    reason = discord.ui.TextInput(label="Причина отказа:", style=discord.TextStyle.long, required=True)
-
-    def __init__(self, applicant: discord.Member = None):
-        super().__init__()
-        self.applicant = applicant
-
-    async def on_submit(self, inter):
-        await inter.response.defer(ephemeral=True)
-        guild = inter.guild
-
-        if not self.applicant and inter.channel.topic:
-            try:
-                self.applicant = guild.get_member(int(inter.channel.topic))
-            except:
-                pass
-
-        app_mention = self.applicant.mention if self.applicant else "@Участник (покинул сервер)"
-        app_name = self.applicant.name if self.applicant else "Неизвестно"
-        app_avatar = self.applicant.display_avatar.url if self.applicant else None
-
-        await inter.channel.send(embed=discord.Embed(
-            title="❌ Заявка на Tier отклонена",
-            description=f"**Игрок:** {app_mention}\n**Проверил:** {inter.user.mention}\n**Причина:** {self.reason.value}",
-            color=0xFF0000
-        ))
-
-        log_ch = guild.get_channel(LOG_CHANNEL_ID)
-        if log_ch:
-            log_emb = discord.Embed(
-                title="📝 Лог Действий: Отказ в Tier",
-                description=f"**Администратор:** {inter.user.mention}\n**Игрок:** {app_mention} ({app_name})\n**Причина:** {self.reason.value}",
-                color=0xFF0000
-            )
-            if app_avatar: log_emb.set_thumbnail(url=app_avatar)
-            await log_ch.send(embed=log_emb)
-
-        if self.applicant:
-            try:
-                await self.applicant.send(embed=discord.Embed(
-                    title="❌ Ваша заявка на Tier была отклонена",
-                    description=f"На сервере **HATRED** вам отказали в Tier.\n**Причина:** {self.reason.value}",
-                    color=0xFF0000
-                ))
-            except:
-                pass
-
-        await inter.channel.send("🛑 *Канал автоматически удалится через 10 секунд...*")
-        await asyncio.sleep(10)
-        await inter.channel.delete()
-
-
-class TierModerationView(discord.ui.View):
-    def __init__(self, applicant: discord.Member = None):
-        super().__init__(timeout=None)
-        self.applicant = applicant
-        self.moderator = None
-
-    async def chk_and_lock(self, inter) -> bool:
-        if not inter.user.guild_permissions.administrator:
-            await inter.response.send_message("❌ Только Администратор сервера может проверять заявки!", ephemeral=True)
-            return False
-        if self.moderator and self.moderator.id != inter.user.id:
-            await inter.response.send_message(f"❌ Эту заявку уже рассматривает {self.moderator.mention}!",
-                                              ephemeral=True)
-            return False
-        return True
-
-    @discord.ui.button(label="Рассмотрение", style=discord.ButtonStyle.blurple, custom_id="t_review_b_new")
-    async def b2(self, inter, b):
-        if not await self.chk_and_lock(inter): return
-        if self.moderator: return await inter.response.send_message("❌ Заявка уже на рассмотрении!", ephemeral=True)
-        self.moderator = inter.user
-        b.disabled = True
-        b.style = discord.ButtonStyle.gray
-        await inter.response.edit_message(view=self)
-        await inter.channel.send(
-            embed=discord.Embed(description=f"👀 Администратор {inter.user.mention} взял заявку на рассмотрение.",
-                                color=0xF1C40F))
-
-    async def assign_tier_role(self, inter, role_name):
-        if not await self.chk_and_lock(inter): return
-        if not self.moderator: return await inter.response.send_message("❌ Сначала нажмите кнопку «Рассмотрение»!",
-                                                                        ephemeral=True)
-        guild = inter.guild
-
-        if not self.applicant and inter.channel.topic:
-            try:
-                self.applicant = guild.get_member(int(inter.channel.topic))
-            except:
-                pass
-
-        if not self.applicant:
-            return await inter.response.send_message("❌ Ошибка: Игрок не найден на сервере.", ephemeral=True)
-
-        role = discord.utils.get(guild.roles, name=role_name)
-        if not role: return await inter.response.send_message(f"❌ Ошибка: Роль `{role_name}` не найдена!",
-                                                              ephemeral=True)
-        try:
-            for r_rem in [discord.utils.get(guild.roles, name=n) for n in ["Tier 1", "Tier 2", "Tier 3"]]:
-                if r_rem and r_rem in self.applicant.roles: await self.applicant.remove_roles(r_rem)
-            await self.applicant.add_roles(role)
-            await inter.response.send_message(embed=discord.Embed(title="🥇 Одобрено: Роль выдана!",
-                                                                  description=f"Пользователю {self.applicant.mention} присвоен статус **{role_name}**!",
-                                                                  color=0x2ECC71))
-            log_ch = guild.get_channel(LOG_CHANNEL_ID)
-            if log_ch:
-                await log_ch.send(embed=discord.Embed(title="📝 Лог: Выдача Tier",
-                                                      description=f"**Модератор:** {inter.user.mention}\n**Игрок:** {self.applicant.mention}\n**Статус:** {role_name}",
-                                                      color=0x2ECC71))
-            try:
-                await self.applicant.send(embed=discord.Embed(title="🎉 Поздравляем!",
-                                                              description=f"Вам выдана роль **{role_name}** на сервере HATRED!",
-                                                              color=0x2ECC71))
-            except:
-                pass
-            self.stop()
-            await inter.channel.send("🛑 *Канал автоматически удалится через 10 секунд...*")
-            await asyncio.sleep(10)
-            await inter.channel.delete()
-        except discord.Forbidden:
-            await inter.response.send_message("❌ У бота нет прав! Поднимите его роль выше остальных в настройках.",
-                                              ephemeral=True)
-
-    @discord.ui.button(label="Tier 1", style=discord.ButtonStyle.green, custom_id="t_t1_b_new")
-    async def b3(self, inter, b):
-        await self.assign_tier_role(inter, "Tier 1")
-
-    @discord.ui.button(label="Tier 2", style=discord.ButtonStyle.green, custom_id="t_t2_b_new")
-    async def b4(self, inter, b):
-        await self.assign_tier_role(inter, "Tier 2")
-
-    @discord.ui.button(label="Tier 3", style=discord.ButtonStyle.green, custom_id="t_t3_b_new")
-    async def b5(self, inter, b):
-        await self.assign_tier_role(inter, "Tier 3")
-
-    @discord.ui.button(label="Отклонить", style=discord.ButtonStyle.red, custom_id="t_reject_b_new")
-    async def b6(self, inter, b):
-        if not await self.chk_and_lock(inter): return
-        if not self.moderator: return await inter.response.send_message("❌ Сначала нажмите кнопку «Рассмотрение»!",
-                                                                        ephemeral=True)
-        if not self.applicant and inter.channel.topic:
-            try:
-                self.applicant = inter.guild.get_member(int(inter.channel.topic))
-            except:
-                pass
-        await inter.response.send_modal(TierRejectModal(self.applicant))
-
-
-class TierModal(discord.ui.Modal, title="Заявка на Tier"):
-    t1 = discord.ui.TextInput(label="1. Откаты с арены Спешик | Сайга 10+мин", style=discord.TextStyle.long,
-                              required=True)
-    t2 = discord.ui.TextInput(label="2. Откаты с MCL | ВЗЗ | ВЗМ | КАПТ | и т.д", style=discord.TextStyle.long,
-                              required=True)
-    t3 = discord.ui.TextInput(label="3. Ссылка на ЛК", style=discord.TextStyle.long, required=True)
-
-    async def on_submit(self, inter):
-        await inter.response.defer(ephemeral=True)
-        guild = inter.guild
-        cat = discord.utils.get(guild.categories, id=int(CATEGORY_TIER_ID))
-        if not cat: return await inter.followup.send("❌ Ошибка: Категория не найдена.", ephemeral=True)
-
-        r1, r2, r3 = guild.get_role(int(ACCESS_ROLE_1_ID)), guild.get_role(int(ACCESS_ROLE_2_ID)), guild.get_role(
-            int(ACCESS_ROLE_3_ID))
-        try:
-            ow = {guild.default_role: discord.PermissionOverwrite(read_messages=False)}
-            for member_role in inter.user.roles:
-                if member_role != guild.default_role:
-                    ow[member_role] = discord.PermissionOverwrite(read_messages=False, send_messages=False)
-
-            ow[inter.user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            ow[guild.me] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-            if r1: ow[r1] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            if r2: ow[r2] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            if r3: ow[r3] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-            ch = await guild.create_text_channel(name=f"тир-{inter.user.name}", category=cat, overwrites=ow,
-                                                 topic=str(inter.user.id))
-        except discord.Forbidden:
-            return await inter.followup.send("❌ Ошибка: У бота нет прав Администратора на создание каналов!",
-                                             ephemeral=True)
-
-        emb = discord.Embed(title=f"🥇 Заявка на Tier от {inter.user.display_name}", color=0x111111)
-        emb.add_field(name="1. Арена 10+мин:", value=self.t1.value, inline=False)
-        emb.add_field(name="2. Откаты MCL/КАПТ:", value=self.t2.value, inline=False)
-        emb.add_field(name="3. Лк", value=self.t3.value, inline=False)
-
-        await ch.send(content=f"{inter.user.mention}", embed=emb, view=TierModerationView(inter.user))
-        await inter.followup.send(f"✅ Канал Tier успешно создан: {ch.mention}", ephemeral=True)
-
-
-class TierView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Подать на Tier", style=discord.ButtonStyle.gray, custom_id="apply_btn_t")
-    async def b(self, inter, btn):
-        cat = discord.utils.get(inter.guild.categories, id=int(CATEGORY_TIER_ID))
-        if cat:
-            for ch in cat.text_channels:
-                if ch.name == f"тир-{inter.user.name}".lower(): return await inter.response.send_message(
-                    f"❌ Канал уже открыт: {ch.mention}", ephemeral=True)
-        await inter.response.send_modal(TierModal())
-
-
 @bot.event
 async def on_ready():
     bot.add_view(TierView())
-    bot.add_view(TierModerationView(None))
-    print(f'Бот {bot.user.name} успешно запущен на хостинге!')
-
+    bot.add_view(TierModerationView())
+    print(f'Бот {bot.user.name} запущен. Доступ к !тир только у ID: {YOUR_DISCORD_ID}')
 
 @bot.command()
 async def тир(ctx):
-    if ctx.author.id != YOUR_DISCORD_ID: return
-
-    description_text = (
-        "### ⠀⠀⠀⠀⠀⠀🔹 **ПОЛУЧЕНИЕ TIER | HATRED**🔹 \n"
-        "### ⠀⠀⠀⠀ ⠀⠀⠀⠀⠀⠀⠀ **🔹⭣ВАЖНО⭣🔹**\n"
-        "### 🔹⭣**Ознакомьтесь с правилами подачи заявки**⭣🔹\n"
-        "### ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[🔹Правила подачи🔹](https://discord.com)"
-    )
-
+    if ctx.author.id != YOUR_DISCORD_ID:
+        return
+    description_text = "### ⠀⠀⠀⠀⠀⠀🤍 **ПОЛУЧЕНИЕ TIER | HATRED** 🤍\n" \
+                       "### ⠀⠀⠀⠀ ⠀⠀⠀⠀⠀⠀⠀ **🤍⭣ ВАЖНО ⭣🤍**\n" \
+                       "### 🤍⭣ **Ознакомьтесь с правилами подачи заявки** ⭣🤍\n" \
+                       "### ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[🤍 Правила подачи 🤍](https://discord.com/channels/1529879785126498495/1564343859985645619/1564344831684255837)"
     embed = discord.Embed(description=description_text, color=0x000000)
-    embed.set_footer(text="⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀By Diego")
-
+    embed.set_footer(text="⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀By Diego ")
     await ctx.send(embed=embed, view=TierView())
-    try:
-        await ctx.message.delete()
-    except:
-        pass
+    try: await ctx.message.delete()
+    except: pass
 
-
-if __name__ == "__main__":
-    bot.run('DISCORD_TOKEN')
-
-
+bot.run(os.getenv('DISCORD_TOKEN'))
