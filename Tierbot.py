@@ -310,5 +310,6 @@ async def тир(ctx):
         pass
 
 
-if name == "main":
+if __name__ == "__main__":
     bot.run(os.getenv('DISCORD_TOKEN'))
+
